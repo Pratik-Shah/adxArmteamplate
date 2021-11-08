@@ -1,0 +1,163 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "defaultValue": "[resourceGroup().location]",
+            "type": "String",
+            "metadata": {
+                "description": "Specifies the Azure location where the key vault should be created."
+            }
+        },
+        "identityName": {
+            "defaultValue": "deploymentScriptIdentity",
+            "type": "String",
+            "metadata": {
+                "description": "Specifies the name of the user-assigned managed identity."
+            }
+        },
+        "adxClusterName": {
+            "defaultValue": "attadxcluster",
+            "type": "String",
+            "metadata": {
+                "description": "Name of the cluster to create"
+            }
+        },
+        "adxDbName": {
+            "defaultValue": "telemetry-att-db",
+            "type": "String",
+            "metadata": {
+                "description": "Name of the cluster to create"
+            }
+        },
+        "adxLogsTableName": {
+            "defaultValue": "uc-logs",
+            "type": "String",
+            "metadata": {
+                "description": "Name of the database to create"
+            }
+        }
+        
+    },
+    "variables": {
+        "bootstrapRoleAssignmentId": "[guid(concat(resourceGroup().id, 'contributor'))]",
+        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Kusto/clusters/databases",
+            "apiVersion": "2020-06-14",
+            "name": "[concat(parameters('adxClusterName'), '/', parameters('adxDbName'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName'))]"
+            ],
+            "properties": {
+                "softDeletePeriodInDays": 365,
+                "hotCachePeriodInDays": 31
+            }
+        },
+        {
+            "type": "Microsoft.Kusto/clusters",
+            "apiVersion": "2020-06-14",
+            "name": "[parameters('adxClusterName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "Standard_D14_v2",
+                "tier": "Standard",
+                "capacity": 3
+            },
+            "properties": {
+                "optimizedAutoscale": {
+                    "version": 1,
+                    "isEnabled": true,
+                    "minimum": 2,
+                    "maximum": 10
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Kusto/Clusters/Databases/PrincipalAssignments",
+            "apiVersion": "2020-09-18",
+            "name": "[concat(parameters('adxClusterName'), '/', parameters('adxDbName'), '/MSIidentity')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Kusto/Clusters/Databases', parameters('adxClusterName'), parameters('adxDbName'))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+            ],
+            "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2018-11-30').clientId]",
+                "principalType": "App",
+                "tenantId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2018-11-30').tenantId]",
+                "role": "Admin"
+            }
+        },
+        {
+            "type": "Microsoft.Kusto/Clusters/PrincipalAssignments",
+            "apiVersion": "2020-09-18",
+            "name": "[concat(parameters('adxClusterName'), '/MSIidentity')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Kusto/Clusters', parameters('adxClusterName'))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+            ],
+            "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2018-11-30').clientId]",
+                "principalType": "App",
+                "tenantId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2018-11-30').tenantId]",
+                "role": "AllDatabasesAdmin"
+            }
+        },
+        {
+            "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+            "apiVersion": "2018-11-30",
+            "name": "[parameters('identityName')]",
+            "location": "[resourceGroup().location]"
+        },
+        {
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "2018-09-01-preview",
+            "name": "[variables('bootstrapRoleAssignmentId')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+            ],
+            "properties": {
+                "roleDefinitionId": "[variables('contributorRoleDefinitionId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2018-11-30').principalId]",
+                "scope": "[resourceGroup().id]",
+                "principalType": "ServicePrincipal"
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deploymentScripts",
+            "apiVersion": "2020-10-01",
+            "name": "AddTableAndPermissions",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Authorization/roleAssignments', variables('bootstrapRoleAssignmentId'))]",
+                "[resourceId('Microsoft.Kusto/clusters/databases', parameters('adxClusterName'), parameters('adxDbName'))]",
+                "[resourceId('Microsoft.Kusto/Clusters/Databases/PrincipalAssignments', parameters('adxClusterName'), parameters('adxDbName'), 'MSIidentity')]",
+                "[resourceId('Microsoft.Kusto/Clusters/PrincipalAssignments', parameters('adxClusterName'), 'MSIidentity')]"
+            ],
+            "kind": "AzurePowerShell",
+            "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                    "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]": {}
+                }
+            },
+            "properties": {
+                "azPowerShellVersion": "5.0",
+                "timeout": "PT30M",
+                "arguments": "[format(' -clusterUrl {0} -dbName {1} -logsTableName {2}', reference(resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName')), '2020-06-14', 'Full').properties.uri, parameters('adxDbName'), parameters('adxLogsTableName'))]",
+                "primaryScriptUri": "https://github.com/ramkriz84/adxArmteamplate/blob/main/DeploymentScript.ps1",
+                "cleanupPreference": "OnSuccess",
+                "retentionInterval": "P1D"
+            }
+        }
+    ],
+    "outputs": {
+        "kustoUrl": {
+            "type": "String",
+            "value": "[reference(resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName')), '2020-06-14', 'Full').properties.uri]"
+        }
+    }
+}
