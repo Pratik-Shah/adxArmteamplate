@@ -1,7 +1,7 @@
 param(
     [string] [Parameter(Mandatory=$true)] $clusterUrl,
     [string] [Parameter(Mandatory=$true)] $dbName,
-    [string] [Parameter(Mandatory=$true)] $logsTableName,
+    [string] [Parameter(Mandatory=$true)] $logsTableName
     
 )
 
