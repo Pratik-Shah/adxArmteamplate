@@ -148,7 +148,7 @@
                 "azPowerShellVersion": "5.0",
                 "timeout": "PT30M",
                 "arguments": "[format(' -clusterUrl {0} -dbName {1} -logsTableName {2}', reference(resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName')), '2020-06-14', 'Full').properties.uri, parameters('adxDbName'), parameters('adxLogsTableName'))]",
-                "primaryScriptUri": "https://github.com/ramkriz84/adxArmteamplate/blob/main/DeploymentScript.ps1",
+                "primaryScriptUri": "https://raw.githubusercontent.com/ramkriz84/adxArmteamplate/main/DeploymentScript.ps1",
                 "cleanupPreference": "OnSuccess",
                 "retentionInterval": "P1D"
             }
