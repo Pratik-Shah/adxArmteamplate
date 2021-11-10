@@ -1,14 +1,7 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
     "contentVersion": "1.0.0.0",
-    "parameters": {
-        "location": {
-            "defaultValue": "[resourceGroup().location]",
-            "type": "String",
-            "metadata": {
-                "description": "Specifies the Azure location where the key vault should be created."
-            }
-        },
+    "parameters": {        
         "identityName": {
             "defaultValue": "deploymentScriptIdentity",
             "type": "String",
@@ -31,24 +24,62 @@
             }
         },
         "adxLogsTableName": {
-            "defaultValue": "uc-logs",
+            "defaultValue": "uclogsdata",
             "type": "String",
             "metadata": {
                 "description": "Name of the database to create"
             }
+        },
+        "adxLogsTableIngestionMappingName" : {
+            "defaultValue" : "unitycloudlogs_mapping",
+            "type" : "string",
+            "metadata": {
+                "description": "Name of the Ingestion Mapping of the unity cloud logs kusto(adx) table"
+            }
+        },
+		"namespaces_eventhub_name": {
+            "defaultValue": "uclogs",
+            "type": "String",
+			"metadata": {
+                "description": "EventHub name"
+            }
+        },
+        "eventhub_for_unitycloud_logs": {
+            "defaultValue": "uceventlogs",
+            "type": "String",
+			"metadata": {
+                "description": "EventHub name"
+            }
         }
-        
     },
     "variables": {
         "bootstrapRoleAssignmentId": "[guid(concat(resourceGroup().id, 'contributor'))]",
         "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
     },
     "resources": [
+	    {
+            "type": "Microsoft.EventHub/namespaces",
+            "apiVersion": "2021-06-01-preview",
+            "name": "[parameters('namespaces_eventhub_name')]",
+            "location": "[resourceGroup().location]",
+            "sku": {
+                "name": "Standard",
+                "tier": "Standard",
+                "capacity": 10
+            },
+            "properties": {
+                "disableLocalAuth": false,
+                "zoneRedundant": false,
+                "isAutoInflateEnabled": true,
+                "maximumThroughputUnits": 10,
+                "kafkaEnabled": true
+            }
+        },
         {
             "type": "Microsoft.Kusto/clusters/databases",
             "apiVersion": "2020-06-14",
             "name": "[concat(parameters('adxClusterName'), '/', parameters('adxDbName'))]",
-            "location": "[parameters('location')]",
+            "location": "[resourceGroup().location]",
             "dependsOn": [
                 "[resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName'))]"
             ],
@@ -61,7 +92,7 @@
             "type": "Microsoft.Kusto/clusters",
             "apiVersion": "2020-06-14",
             "name": "[parameters('adxClusterName')]",
-            "location": "[parameters('location')]",
+            "location": "[resourceGroup().location]",
             "sku": {
                 "name": "Standard_D14_v2",
                 "tier": "Standard",
@@ -74,6 +105,86 @@
                     "minimum": 2,
                     "maximum": 10
                 }
+            }
+        },
+		{
+            "type": "Microsoft.EventHub/namespaces/AuthorizationRules",
+            "apiVersion": "2021-06-01-preview",
+            "name": "[concat(parameters('namespaces_eventhub_name'), '/RootManageSharedAccessKey')]",
+            "location":  "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaces_eventhub_name'))]"
+            ],
+            "properties": {
+                "rights": [
+                    "Listen",
+                    "Manage",
+                    "Send"
+                ]
+            }
+        },        
+        {
+            "type": "Microsoft.EventHub/namespaces/eventhubs",
+            "apiVersion": "2021-06-01-preview",
+            "name": "[concat(parameters('namespaces_eventhub_name'), '/', parameters('eventhub_for_unitycloud_logs'))]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaces_eventhub_name'))]"
+            ],
+            "properties": {
+                "messageRetentionInDays": 1,
+                "partitionCount": 1,
+                "status": "Active"
+            }
+        },
+        {
+            "type": "Microsoft.EventHub/namespaces/networkRuleSets",
+            "apiVersion": "2021-06-01-preview",
+            "name": "[concat(parameters('namespaces_eventhub_name'), '/default')]",
+            "location":  "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaces_eventhub_name'))]"
+            ],
+            "properties": {
+                "publicNetworkAccess": "Enabled",
+                "defaultAction": "Allow",
+                "virtualNetworkRules": [],
+                "ipRules": []
+            }
+        },
+		{
+            "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+            "apiVersion": "2021-06-01-preview",
+            "name": "[concat(parameters('namespaces_eventhub_name'), '/', parameters('eventhub_for_unitycloud_logs'), '/$Default')]",
+            "location":  "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('namespaces_eventhub_name'), parameters('eventhub_for_unitycloud_logs'))]",
+                "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaces_eventhub_name'))]"
+            ],
+            "properties": {}
+        },
+        {
+            "type": "Microsoft.Kusto/Clusters/Databases/DataConnections",
+            "apiVersion": "2021-01-01",
+            "name": "[concat(parameters('adxClusterName'), '/', parameters('adxDbName'), '/uclogs-uceventlogs')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Kusto/Clusters/Databases', parameters('adxClusterName'), parameters('adxDbName'))]",
+                "[resourceId('Microsoft.Kusto/Clusters', parameters('adxClusterName'))]",
+                "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('namespaces_eventhub_name'), parameters('eventhub_for_unitycloud_logs'))]",
+                "[resourceId('Microsoft.Kusto/Clusters/Databases/PrincipalAssignments', parameters('adxClusterName'), parameters('adxDbName'), 'MSIidentity')]",
+                "[resourceId('Microsoft.Kusto/Clusters/PrincipalAssignments', parameters('adxClusterName'), 'MSIidentity')]",                
+                "[resourceId('Microsoft.Resources/deploymentScripts', 'AddTableAndPermissions')]"
+            ],
+            "kind": "EventHub",
+            "properties": {
+                "eventHubResourceId": "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('namespaces_eventhub_name'), parameters('eventhub_for_unitycloud_logs'))]",
+                "consumerGroup": "$Default",
+                "tableName": "[parameters('adxLogsTableName')]",
+                "mappingRuleName": "[parameters('adxLogsTableIngestionMappingName')]",
+                "dataFormat": "JSON",
+                "eventSystemProperties": [],
+                "compression": "None"
             }
         },
         {
@@ -147,8 +258,8 @@
             "properties": {
                 "azPowerShellVersion": "5.0",
                 "timeout": "PT30M",
-                "arguments": "[format(' -clusterUrl {0} -dbName {1} -logsTableName {2}', reference(resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName')), '2020-06-14', 'Full').properties.uri, parameters('adxDbName'), parameters('adxLogsTableName'))]",
-                "primaryScriptUri": "https://raw.githubusercontent.com/ramkriz84/adxArmteamplate/main/DeploymentScript.ps1",
+                "arguments": "[format(' -clusterUrl {0} -dbName {1} -logsTableName {2} -logsTableNameIngestionMappingName {3}', reference(resourceId('Microsoft.Kusto/clusters', parameters('adxClusterName')), '2020-06-14', 'Full').properties.uri, parameters('adxDbName'), parameters('adxLogsTableName'),parameters('adxLogsTableIngestionMappingName'))]",
+                "primaryScriptUri": "https://raw.githubusercontent.com/Pratik-Shah/adxArmteamplate/main/DeploymentScript.ps1",
                 "cleanupPreference": "OnSuccess",
                 "retentionInterval": "P1D"
             }
